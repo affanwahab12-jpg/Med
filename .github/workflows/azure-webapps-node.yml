@@ -1,0 +1,578 @@
+import { useState, useRef, useEffect } from "react";
+
+// ─── Mock Medicine Inventory Database ───────────────────────────────────────
+const MEDICINE_DB = [
+  {
+    id: 1, name: "Rifampicin 600mg", type: "hospital",
+    storeName: "District Headquarter Hospital",
+    area: "Saddar, Rawalpindi", phone: "051-9270340",
+    qty: 120, unit: "Capsules", timing: "8am–10pm", distance: "1.2 km",
+    lat: 33.5651, lng: 73.0169,
+  },
+  {
+    id: 2, name: "Rifampicin 600mg", type: "clinic",
+    storeName: "Al-Shifa Medical Clinic",
+    area: "Raja Bazar, Rawalpindi", phone: "051-5551234",
+    qty: 40, unit: "Capsules", timing: "9am–9pm", distance: "2.5 km",
+    lat: 33.5900, lng: 73.0420,
+  },
+  {
+    id: 3, name: "Rifampicin 600mg", type: "pharmacy",
+    storeName: "Hamdard Dawakhana",
+    area: "Murree Road, Rawalpindi", phone: "051-4441100",
+    qty: 15, unit: "Capsules", timing: "24/7", distance: "3.1 km",
+    lat: 33.5800, lng: 73.0300,
+  },
+  {
+    id: 4, name: "Clofazimine 100mg", type: "hospital",
+    storeName: "Holy Family Hospital",
+    area: "Satellite Town, Rawalpindi", phone: "051-9290301",
+    qty: 200, unit: "Tablets", timing: "24/7", distance: "2.0 km",
+    lat: 33.6007, lng: 73.0679,
+  },
+  {
+    id: 5, name: "Clofazimine 100mg", type: "pharmacy",
+    storeName: "Shifa International Pharmacy",
+    area: "H-8, Islamabad", phone: "051-8464646",
+    qty: 30, unit: "Tablets", timing: "8am–11pm", distance: "5.4 km",
+    lat: 33.6844, lng: 73.0479,
+  },
+  {
+    id: 6, name: "Pyrazinamide 500mg", type: "pharmacy",
+    storeName: "MedCity Pharmacy",
+    area: "Committee Chowk, Rawalpindi", phone: "051-5559876",
+    qty: 300, unit: "Tablets", timing: "9am–10pm", distance: "1.8 km",
+    lat: 33.5720, lng: 73.0500,
+  },
+  {
+    id: 7, name: "Pyrazinamide 500mg", type: "hospital",
+    storeName: "Benazir Bhutto Hospital",
+    area: "Phase-6, Rawalpindi", phone: "051-9291088",
+    qty: 500, unit: "Tablets", timing: "24/7", distance: "3.9 km",
+    lat: 33.5500, lng: 73.1000,
+  },
+  {
+    id: 8, name: "Cycloserine 250mg", type: "hospital",
+    storeName: "Pakistan Institute of Medical Sciences",
+    area: "G-8, Islamabad", phone: "051-9260350",
+    qty: 80, unit: "Capsules", timing: "24/7", distance: "6.2 km",
+    lat: 33.6938, lng: 73.0560,
+  },
+  {
+    id: 9, name: "Dapsone 100mg", type: "clinic",
+    storeName: "Skin & Leprosy Centre",
+    area: "Lalkurti, Rawalpindi", phone: "051-5600011",
+    qty: 150, unit: "Tablets", timing: "8am–4pm", distance: "0.9 km",
+    lat: 33.5670, lng: 73.0450,
+  },
+  {
+    id: 10, name: "Hydroxychloroquine 200mg", type: "pharmacy",
+    storeName: "Care Pharmacy",
+    area: "Bahria Town Phase-4", phone: "051-5733333",
+    qty: 60, unit: "Tablets", timing: "9am–midnight", distance: "8.1 km",
+    lat: 33.5251, lng: 72.9869,
+  },
+  {
+    id: 11, name: "Colchicine 0.5mg", type: "pharmacy",
+    storeName: "Servaid Pharmacy",
+    area: "F-10 Markaz, Islamabad", phone: "0800-00786",
+    qty: 90, unit: "Tablets", timing: "24/7", distance: "7.4 km",
+    lat: 33.6900, lng: 73.0200,
+  },
+  {
+    id: 12, name: "Colchicine 0.5mg", type: "hospital",
+    storeName: "Akbar Niazi Teaching Hospital",
+    area: "Bharakahu, Islamabad", phone: "051-2894500",
+    qty: 200, unit: "Tablets", timing: "24/7", distance: "12 km",
+    lat: 33.7600, lng: 73.1500,
+  },
+];
+
+const TYPE_CONFIG = {
+  hospital: { icon: "🏥", color: "#0f7b5c", bg: "#e6f7f2", label: "Hospital" },
+  clinic:   { icon: "🩺", color: "#1a6bbd", bg: "#e6f0fb", label: "Clinic"   },
+  pharmacy: { icon: "💊", color: "#8b3fa8", bg: "#f3e8fb", label: "Pharmacy" },
+};
+
+// ─── Anthropic API Call ───────────────────────────────────────────────────────
+async function askAgent(userQuery, dbList) {
+  const medicineNames = [...new Set(dbList.map(d => d.name))].join(", ");
+
+  const systemPrompt = `You are MediFind — an AI medicine availability agent for Pakistani cities.
+You help citizens find rare medicines at nearby stores, clinics, and hospitals.
+
+Available medicines in database: ${medicineNames}
+
+Your job:
+1. Extract the medicine name from user query (handle typos, Urdu-English mix, brand/generic names).
+2. Return a JSON object ONLY — no markdown, no explanation. Format:
+{
+  "identified_medicine": "<exact name from list, or closest match>",
+  "confidence": "high|medium|low",
+  "message_urdu": "<2-line friendly Urdu message to user about what you found>",
+  "message_english": "<2-line friendly English message>",
+  "not_found": false
+}
+If medicine not found in database at all, set "not_found": true and suggest what to do.`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 400,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userQuery }],
+    }),
+  });
+  const data = await res.json();
+  const text = data.content?.map(b => b.text || "").join("") || "";
+  const clean = text.replace(/```json|```/g, "").trim();
+  return JSON.parse(clean);
+}
+
+// ─── Components ───────────────────────────────────────────────────────────────
+function ResultCard({ store }) {
+  const cfg = TYPE_CONFIG[store.type];
+  const qtyColor = store.qty < 20 ? "#c0392b" : store.qty < 50 ? "#d68910" : "#0f7b5c";
+
+  return (
+    <div style={{
+      background: "#fff",
+      borderRadius: 16,
+      border: `1.5px solid ${cfg.color}22`,
+      boxShadow: "0 2px 16px #0001",
+      padding: "18px 22px",
+      marginBottom: 14,
+      display: "flex",
+      gap: 16,
+      alignItems: "flex-start",
+      transition: "box-shadow 0.2s",
+      cursor: "default",
+    }}
+      onMouseEnter={e => e.currentTarget.style.boxShadow = `0 6px 28px ${cfg.color}33`}
+      onMouseLeave={e => e.currentTarget.style.boxShadow = "0 2px 16px #0001"}
+    >
+      <div style={{
+        width: 48, height: 48, borderRadius: 12,
+        background: cfg.bg, display: "flex",
+        alignItems: "center", justifyContent: "center",
+        fontSize: 24, flexShrink: 0,
+      }}>{cfg.icon}</div>
+
+      <div style={{ flex: 1 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 4 }}>
+          <div>
+            <span style={{ fontWeight: 700, fontSize: 16, color: "#1a1a2e" }}>{store.storeName}</span>
+            <span style={{
+              marginLeft: 8, fontSize: 11, fontWeight: 600,
+              background: cfg.bg, color: cfg.color,
+              padding: "2px 8px", borderRadius: 20,
+            }}>{cfg.label}</span>
+          </div>
+          <span style={{ fontSize: 12, color: "#888", fontWeight: 500 }}>📍 {store.distance}</span>
+        </div>
+
+        <div style={{ fontSize: 13, color: "#555", margin: "4px 0 2px" }}>
+          🏙️ {store.area}
+        </div>
+        <div style={{ fontSize: 13, color: "#555", marginBottom: 8 }}>
+          📞 {store.phone} &nbsp;|&nbsp; ⏰ {store.timing}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{
+            background: `${qtyColor}15`, color: qtyColor,
+            fontWeight: 700, fontSize: 13,
+            padding: "4px 14px", borderRadius: 20, border: `1.5px solid ${qtyColor}40`
+          }}>
+            ✅ {store.qty} {store.unit} available
+          </div>
+          <a
+            href={`https://maps.google.com/?q=${store.lat},${store.lng}`}
+            target="_blank" rel="noopener noreferrer"
+            style={{
+              fontSize: 12, color: "#1a6bbd",
+              textDecoration: "none", fontWeight: 600,
+              padding: "4px 12px", borderRadius: 20,
+              border: "1.5px solid #1a6bbd40",
+              background: "#e8f0fe",
+            }}
+          >🗺️ Map</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeployGuide() {
+  const steps = [
+    {
+      icon: "🗄️", title: "Step 1: Real Database Banao",
+      detail: "Google Sheets / Supabase / Firebase mein apne city ke medical stores ka data enter karo: Store name, address, phone, medicines, quantity. Har roz update hota rahe."
+    },
+    {
+      icon: "🌐", title: "Step 2: Website Deploy karo",
+      detail: "Is React app ko Vercel ya Netlify par free deploy karo. Domain name lo jaise 'medifindrwp.pk'. Bas GitHub par upload karo, auto-deploy ho jaega."
+    },
+    {
+      icon: "📱", title: "Step 3: WhatsApp Bot Joro",
+      detail: "Twilio WhatsApp API use karo. Log simply 'Rifampicin chahiye' likhein aur bot automatically reply kare nearest store ke saath. No app download needed."
+    },
+    {
+      icon: "🏥", title: "Step 4: Stores ko Onboard karo",
+      detail: "City ke medical stores se contact karo. Unko ek simple form do jisme wo apni daily inventory update kar sakein. Incentive: Free listing + customers."
+    },
+    {
+      icon: "📣", title: "Step 5: Logon Tak Pahoncho",
+      detail: "Facebook Groups, local hospitals notice board, doctors offices mein QR code lagao. City administration ko present karo — District Health Officer se approval lo."
+    },
+    {
+      icon: "🤖", title: "Step 6: AI Ko Smart Banao",
+      detail: "Anthropic API already integrated hai. Jaise jaise log search karein, common medicines ka data improve hota jaega. Monthly analytics se gap pata chalega."
+    },
+  ];
+
+  return (
+    <div style={{ padding: "8px 0" }}>
+      <div style={{
+        background: "linear-gradient(135deg, #0f7b5c15, #1a6bbd15)",
+        borderRadius: 14, padding: "16px 20px", marginBottom: 20,
+        border: "1px solid #0f7b5c30"
+      }}>
+        <div style={{ fontWeight: 700, fontSize: 15, color: "#0f7b5c", marginBottom: 4 }}>
+          🚀 Apna City-wide Medicine Network Launch karo
+        </div>
+        <div style={{ fontSize: 13, color: "#444", lineHeight: 1.6 }}>
+          Ye complete roadmap hai is agent ko real deployment tak lay jaane ka — 
+          akele ya city administration ke saath mil kar.
+        </div>
+      </div>
+
+      {steps.map((s, i) => (
+        <div key={i} style={{
+          display: "flex", gap: 14, marginBottom: 16,
+          padding: "14px 18px", borderRadius: 12,
+          background: "#fff", border: "1px solid #eee",
+          boxShadow: "0 1px 8px #0001"
+        }}>
+          <div style={{ fontSize: 26, flexShrink: 0 }}>{s.icon}</div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "#1a1a2e", marginBottom: 3 }}>{s.title}</div>
+            <div style={{ fontSize: 13, color: "#555", lineHeight: 1.6 }}>{s.detail}</div>
+          </div>
+        </div>
+      ))}
+
+      <div style={{
+        background: "#1a1a2e", borderRadius: 14,
+        padding: "16px 20px", marginTop: 8, color: "#fff"
+      }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: "#4aeab2" }}>
+          💰 Cost Estimate (Monthly)
+        </div>
+        {[
+          ["Vercel Hosting", "Free"],
+          ["Anthropic API (1000 searches)", "~$2–5"],
+          ["Twilio WhatsApp Bot", "~$5–10"],
+          ["Domain (.pk)", "~Rs. 2,000/year"],
+          ["Total", "~Rs. 3,000–5,000/month"],
+        ].map(([k, v], i) => (
+          <div key={i} style={{
+            display: "flex", justifyContent: "space-between",
+            padding: "5px 0",
+            borderBottom: i < 4 ? "1px solid #ffffff15" : "none",
+            fontSize: 13,
+            fontWeight: i === 4 ? 700 : 400,
+            color: i === 4 ? "#4aeab2" : "#ccc"
+          }}>
+            <span>{k}</span><span>{v}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
+export default function MediFind() {
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState(null);
+  const [aiResponse, setAiResponse] = useState(null);
+  const [error, setError] = useState("");
+  const [tab, setTab] = useState("search");
+  const inputRef = useRef();
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const handleSearch = async () => {
+    if (!query.trim()) return;
+    setLoading(true);
+    setResults(null);
+    setAiResponse(null);
+    setError("");
+
+    try {
+      const aiRes = await askAgent(query, MEDICINE_DB);
+      setAiResponse(aiRes);
+
+      if (aiRes.not_found) {
+        setResults([]);
+      } else {
+        const matches = MEDICINE_DB.filter(d =>
+          d.name.toLowerCase().includes(
+            aiRes.identified_medicine?.toLowerCase().split(" ")[0] || ""
+          )
+        ).sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+        setResults(matches);
+      }
+    } catch (e) {
+      setError("Connection error. Please check your internet and try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const suggestions = [
+    "Rifampicin 600mg chahiye",
+    "Clofazimine kahan milegi?",
+    "Cycloserine available hai?",
+    "Colchicine tablets dhundho",
+  ];
+
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: "linear-gradient(160deg, #f0faf6 0%, #e8f4fd 50%, #f5e8fd 100%)",
+      fontFamily: "'Segoe UI', system-ui, sans-serif",
+      padding: "0 0 40px 0",
+    }}>
+      {/* Header */}
+      <div style={{
+        background: "linear-gradient(135deg, #0f7b5c, #1a6bbd)",
+        padding: "20px 24px 24px",
+        color: "#fff",
+      }}>
+        <div style={{ maxWidth: 680, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
+            <div style={{
+              width: 44, height: 44, borderRadius: 12,
+              background: "#ffffff25", display: "flex",
+              alignItems: "center", justifyContent: "center", fontSize: 22
+            }}>💊</div>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 22, letterSpacing: -0.5 }}>MediFind AI</div>
+              <div style={{ fontSize: 12, opacity: 0.85 }}>
+                Apne shehar mein koi bhi medicine talash karo — seconds mein
+              </div>
+            </div>
+          </div>
+
+          {/* Tab Bar */}
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            {[
+              { key: "search", label: "🔍 Medicine Dhundho" },
+              { key: "deploy", label: "🚀 Deploy Guide" },
+            ].map(t => (
+              <button key={t.key} onClick={() => setTab(t.key)} style={{
+                padding: "7px 16px", borderRadius: 20, border: "none",
+                cursor: "pointer", fontSize: 13, fontWeight: 600,
+                background: tab === t.key ? "#fff" : "#ffffff25",
+                color: tab === t.key ? "#0f7b5c" : "#fff",
+                transition: "all 0.2s",
+              }}>{t.label}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 680, margin: "0 auto", padding: "0 16px" }}>
+
+        {tab === "search" && (
+          <>
+            {/* Search Box */}
+            <div style={{
+              background: "#fff", borderRadius: 18,
+              boxShadow: "0 8px 32px #0f7b5c20",
+              padding: "20px", marginTop: -12, position: "relative", zIndex: 2,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 8 }}>
+                Medicine ka naam likhein (Urdu ya English mein)
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <input
+                  ref={inputRef}
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && handleSearch()}
+                  placeholder="e.g. Rifampicin chahiye, Colchicine kahan milegi..."
+                  style={{
+                    flex: 1, padding: "12px 16px", borderRadius: 12,
+                    border: "2px solid #e0e0e0", fontSize: 14,
+                    outline: "none", transition: "border 0.2s",
+                    background: "#f8f9fa",
+                  }}
+                  onFocus={e => e.target.style.borderColor = "#0f7b5c"}
+                  onBlur={e => e.target.style.borderColor = "#e0e0e0"}
+                />
+                <button
+                  onClick={handleSearch}
+                  disabled={loading || !query.trim()}
+                  style={{
+                    padding: "12px 22px", borderRadius: 12,
+                    background: loading ? "#aaa" : "linear-gradient(135deg, #0f7b5c, #1a6bbd)",
+                    color: "#fff", border: "none", cursor: loading ? "wait" : "pointer",
+                    fontWeight: 700, fontSize: 14, whiteSpace: "nowrap",
+                    transition: "opacity 0.2s",
+                  }}
+                >
+                  {loading ? "⏳ Searching..." : "🔍 Talash Karo"}
+                </button>
+              </div>
+
+              {/* Suggestions */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
+                {suggestions.map((s, i) => (
+                  <button key={i} onClick={() => { setQuery(s); }} style={{
+                    padding: "5px 12px", borderRadius: 20,
+                    background: "#f0faf6", border: "1px solid #0f7b5c30",
+                    color: "#0f7b5c", fontSize: 12, fontWeight: 600,
+                    cursor: "pointer",
+                  }}>{s}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Error */}
+            {error && (
+              <div style={{
+                background: "#fff0f0", border: "1px solid #ffaaaa",
+                borderRadius: 12, padding: 14, marginTop: 14,
+                color: "#c0392b", fontSize: 13
+              }}>❌ {error}</div>
+            )}
+
+            {/* AI Message */}
+            {aiResponse && (
+              <div style={{
+                background: "linear-gradient(135deg, #e6f7f2, #e8f0fb)",
+                border: "1.5px solid #0f7b5c30",
+                borderRadius: 14, padding: "16px 18px", marginTop: 16,
+              }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <div style={{ fontSize: 22 }}>🤖</div>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: "#0f7b5c", marginBottom: 4 }}>
+                      MediFind AI — {aiResponse.confidence === "high" ? "✅ Puri confidence ke saath mila" : aiResponse.confidence === "medium" ? "🟡 Zyada chance hai ye sahi hai" : "⚠️ Approximate match"}
+                    </div>
+                    <div style={{ fontSize: 14, color: "#333", marginBottom: 4 }}>
+                      {aiResponse.message_urdu}
+                    </div>
+                    <div style={{ fontSize: 13, color: "#555" }}>
+                      {aiResponse.message_english}
+                    </div>
+                    {aiResponse.identified_medicine && !aiResponse.not_found && (
+                      <div style={{
+                        marginTop: 8, fontSize: 12, fontWeight: 700,
+                        color: "#1a6bbd",
+                      }}>
+                        🔎 Searching for: <span style={{ fontFamily: "monospace" }}>{aiResponse.identified_medicine}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Results */}
+            {results !== null && (
+              <div style={{ marginTop: 18 }}>
+                {results.length === 0 ? (
+                  <div style={{
+                    textAlign: "center", padding: "32px 20px",
+                    background: "#fff", borderRadius: 16,
+                    border: "1px solid #eee",
+                  }}>
+                    <div style={{ fontSize: 40, marginBottom: 10 }}>😔</div>
+                    <div style={{ fontWeight: 700, fontSize: 16, color: "#333", marginBottom: 6 }}>
+                      Ye medicine abhi available nahi
+                    </div>
+                    <div style={{ fontSize# This workflow will build and push a node.js application to an Azure Web App when a commit is pushed to your default branch.
+#
+# This workflow assumes you have already created the target Azure App Service web app.
+# For instructions see https://docs.microsoft.com/en-us/azure/app-service/quickstart-nodejs?tabs=linux&pivots=development-environment-cli
+#
+# To configure this workflow:
+#
+# 1. Download the Publish Profile for your Azure Web App. You can download this file from the Overview page of your Web App in the Azure Portal.
+#    For more information: https://docs.microsoft.com/en-us/azure/app-service/deploy-github-actions?tabs=applevel#generate-deployment-credentials
+#
+# 2. Create a secret in your repository named AZURE_WEBAPP_PUBLISH_PROFILE, paste the publish profile contents as the value of the secret.
+#    For instructions on obtaining the publish profile see: https://docs.microsoft.com/azure/app-service/deploy-github-actions#configure-the-github-secret
+#
+# 3. Change the value for the AZURE_WEBAPP_NAME. Optionally, change the AZURE_WEBAPP_PACKAGE_PATH and NODE_VERSION environment variables below.
+#
+# For more information on GitHub Actions for Azure: https://github.com/Azure/Actions
+# For more information on the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# For more samples to get started with GitHub Action workflows to deploy to Azure: https://github.com/Azure/actions-workflow-samples
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_NAME: your-app-name    # set this to your application's name
+  AZURE_WEBAPP_PACKAGE_PATH: '.'      # set this to the path to your web app project, defaults to the repository root
+  NODE_VERSION: '20.x'                # set this to the node version to use
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: npm install, build, and test
+      run: |
+        npm install
+        npm run build --if-present
+        npm run test --if-present
+
+    - name: Upload artifact for deployment job
+      uses: actions/upload-artifact@v4
+      with:
+        name: node-app
+        path: .
+
+  deploy:
+    permissions:
+      contents: none
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: 'Development'
+      url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
+
+    steps:
+    - name: Download artifact from build job
+      uses: actions/download-artifact@v4
+      with:
+        name: node-app
+
+    - name: 'Deploy to Azure WebApp'
+      id: deploy-to-webapp
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: ${{ env.AZURE_WEBAPP_NAME }}
+        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+        package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
